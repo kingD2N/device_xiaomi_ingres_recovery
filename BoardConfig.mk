@@ -211,9 +211,6 @@ RECOVERY_BINARY_SOURCE_FILES += \
 RECOVERY_LIBRARY_SOURCE_FILES += \
     $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/vendor.qti.hardware.vibrator.impl.so \
     $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/libqtivibratoreffect.so
-$(info ingres: HAL vibrator qcom dibuild dari source (IVibrator/default) + HAL Xiaomi cadangan)
-else
-$(info ingres: source vibrator qcom layout lama tidak ada -- pakai HAL Xiaomi saja)
 endif
 TW_EXCLUDE_TWRPAPP := true
 
