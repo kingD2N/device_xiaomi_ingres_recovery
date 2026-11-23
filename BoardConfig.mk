@@ -137,7 +137,9 @@ BOARD_PROPERTY_OVERRIDES_SPLIT_ENABLED := true
 TARGET_SYSTEM_PROP += $(DEVICE_PATH)/system.prop
 
 # Recovery
-TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
+# Tanpa tanda kutip: nilai ini diekspor ke JSON Soong (RecoveryPixelFormat) di Android 16;
+# kutip ganda merusak JSON ("Expecting , delimiter" di soong.*.extra.variables).
+TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 
 # Screen density
