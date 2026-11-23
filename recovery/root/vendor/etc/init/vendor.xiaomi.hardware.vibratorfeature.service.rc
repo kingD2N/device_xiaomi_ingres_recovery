@@ -43,11 +43,29 @@ on fs
     chown system system /sys/bus/i2c/drivers/awinic_haptic/5-005a/custom_wave
     chown system system /sys/bus/i2c/drivers/awinic_haptic/6-005a/custom_wave
 
-on boot
+# ------------------------------------------------------------------------------
+# HAL vibrator ASLI ingres (Xiaomi vibratorfeature, IVibrator/vibratorfeature).
+# Dipakai untuk build fox_12.1 (SDK 30-33). Binary ini dibangun dengan toolchain
+# Android 12/13 jadi cocok dengan libc++ recovery fox_12.1.
+# Untuk fox_14.1 / fox_16.0 (SDK >= 34) yang dipakai HAL open-source QTI hasil
+# port dari marble -- lihat /system/etc/init/vendor.qti.hardware.vibrator.service.rc.
+# Pilihan FQNAME di BoardConfig.mk mengikuti aturan SDK yang SAMA persis.
+# ------------------------------------------------------------------------------
+on boot && property:ro.build.version.sdk=30
+    start vibratorfeature-hal-service
+
+on boot && property:ro.build.version.sdk=31
+    start vibratorfeature-hal-service
+
+on boot && property:ro.build.version.sdk=32
+    start vibratorfeature-hal-service
+
+on boot && property:ro.build.version.sdk=33
     start vibratorfeature-hal-service
 
 service vibratorfeature-hal-service /vendor/bin/hw/vendor.xiaomi.hardware.vibratorfeature.service
     class hal
     user root
     group root system input
+    disabled
     seclabel u:r:recovery:s0

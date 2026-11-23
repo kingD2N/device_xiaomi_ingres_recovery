@@ -1,0 +1,32 @@
+# ------------------------------------------------------------------------------
+# HAL vibrator open-source QTI (lineage-23.2), di-port dari OFRP marble
+# (Ctapchuk/android_device_xiaomi_marble-OFRP, fox_16.0 bring up).
+# HAL ini mengenali input device "awinic_haptic" / "aw8697_haptic" milik ingres,
+# jadi motor X-axis ingres tetap jalan walau hardware-nya beda dari marble.
+#
+# HANYA dinyalakan di build fox_14.1 / fox_16.0 (SDK >= 34): library-nya butuh
+# simbol libc++ "__libcpp_verbose_abort" yang TIDAK ADA di libc++ fox_12.1,
+# jadi di fox_12.1 yang dipakai HAL asli Xiaomi (vibratorfeature).
+# ------------------------------------------------------------------------------
+service vendor.qti.vibrator /system/bin/vendor.qti.hardware.vibrator.service
+    class hal
+    user root
+    group root input
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    disabled
+    seclabel u:r:recovery:s0
+
+on boot && property:ro.build.version.sdk=34
+    start vendor.qti.vibrator
+
+on boot && property:ro.build.version.sdk=35
+    start vendor.qti.vibrator
+
+on boot && property:ro.build.version.sdk=36
+    start vendor.qti.vibrator
+
+on boot && property:ro.build.version.sdk=37
+    start vendor.qti.vibrator
+
+on boot && property:ro.build.version.sdk=38
+    start vendor.qti.vibrator

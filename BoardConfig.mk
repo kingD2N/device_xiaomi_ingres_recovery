@@ -170,17 +170,45 @@ TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1024
 TW_NO_SCREEN_BLANK := true
+# Layar ingres 120Hz (diambil dari tree marble)
+TW_FRAMERATE := 120
 
-# TWRP Haptics
-# Vibrator/haptics DIMATIKAN atas permintaan eksplisit. TW_SUPPORT_INPUT_AIDL_HAPTICS
-# dikomentari (sisi TWRP app tidak lagi mencoba bind ke HAL vibrator "IVibrator/vibratorfeature"),
-# TW_NO_HAPTICS diaktifkan sebagai penonaktif eksplisit. File firmware (aw8697_haptic.bin,
-# aw8697_haptic_nv.bin) SENGAJA TIDAK dihapus -- kernel driver memuatnya sendiri lewat
-# request_firmware() secara independen, menghapusnya cuma memicu probe error yang tidak
-# terkait, tidak benar-benar mematikan apa pun.
-#TW_SUPPORT_INPUT_AIDL_HAPTICS := true
-#TW_SUPPORT_INPUT_AIDL_HAPTICS_FQNAME := "IVibrator/vibratorfeature"
-TW_NO_HAPTICS := true
+# Tambahan dari tree marble
+# - Device ID pakai serialno (stabil antar format/flash)
+# - Fingerprint & incremental diambil dari ROM terpasang (bantu assert zip OTA/ROM)
+# - mke2fs untuk membuat filesystem ext4 saat format
+TW_USE_SERIALNO_PROPERTY_FOR_DEVICE_ID := true
+TW_OVERRIDE_SYSTEM_PROPS := \
+    "ro.build.fingerprint=ro.vendor.build.fingerprint;ro.build.version.incremental"
+TARGET_USES_MKE2FS := true
+
+# TWRP Haptics (vibrator) -- DIAKTIFKAN LAGI, kombinasi ingres + marble
+# Dua HAL dibawa di ramdisk, dipilih otomatis sesuai manifest yang dipakai build:
+#   - fox_12.1 (SDK 30-33)       : HAL ASLI ingres, vendor.xiaomi.hardware.vibratorfeature
+#                                  (instance IVibrator/vibratorfeature).
+#   - fox_14.1/fox_16.0 (SDK>=34): HAL open-source QTI lineage-23.2 dari OFRP marble
+#                                  (instance IVibrator/default). Library-nya butuh simbol
+#                                  libc++ "__libcpp_verbose_abort" yang tidak ada di
+#                                  fox_12.1, makanya tidak dipakai di sana.
+# Service mana yang dinyalakan diatur di file .rc lewat ro.build.version.sdk (aturan SDK
+# yang SAMA dengan blok di bawah), jadi FQNAME yang dicari TWRP selalu cocok dengan HAL
+# yang benar-benar jalan. Kalau tidak cocok, TWRP akan nunggu service (UI terasa lag).
+INGRES_RECOVERY_SDK := $(strip $(PLATFORM_SDK_VERSION))
+INGRES_QTI_VIBRATOR := false
+ifneq ($(INGRES_RECOVERY_SDK),)
+INGRES_QTI_VIBRATOR := $(shell [ "$(INGRES_RECOVERY_SDK)" -ge 34 ] 2>/dev/null && echo true || echo false)
+endif
+
+TW_SUPPORT_INPUT_AIDL_HAPTICS := true
+ifeq ($(INGRES_QTI_VIBRATOR),true)
+# HAL QTI (marble) -> instance default (FQNAME tidak diset). Selector-nya butuh libexpat.
+TARGET_RECOVERY_DEVICE_MODULES += libexpat
+RECOVERY_LIBRARY_SOURCE_FILES += $(TARGET_OUT_SHARED_LIBRARIES)/libexpat.so
+$(info ingres: SDK $(INGRES_RECOVERY_SDK) -> vibrator HAL QTI open-source (IVibrator/default))
+else
+TW_SUPPORT_INPUT_AIDL_HAPTICS_FQNAME := "IVibrator/vibratorfeature"
+$(info ingres: SDK $(INGRES_RECOVERY_SDK) -> vibrator HAL Xiaomi vibratorfeature)
+endif
 TW_EXCLUDE_TWRPAPP := true
 
 # TWRP Version

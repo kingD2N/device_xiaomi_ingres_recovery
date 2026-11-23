@@ -40,6 +40,22 @@ Works:
 - [X] USB OTG
 - [X] Vibrator
 
+## Vibrator (kombinasi ingres + marble)
+
+| Manifest build | HAL vibrator yang dipakai |
+|---|---|
+| fox_12.1 | HAL asli ingres `vendor.xiaomi.hardware.vibratorfeature` (`IVibrator/vibratorfeature`) |
+| fox_14.1 / fox_16.0 | HAL open-source QTI lineage-23.2 dari OFRP marble (`IVibrator/default`) |
+
+Pemilihan otomatis berdasarkan `PLATFORM_SDK_VERSION` (BoardConfig.mk) dan
+`ro.build.version.sdk` (file `.rc`). HAL QTI tidak dipakai di fox_12.1 karena
+library-nya butuh simbol libc++ `__libcpp_verbose_abort` yang belum ada di sana.
+
+## Credits
+
+- [Ctapchuk/android_device_xiaomi_marble-OFRP](https://github.com/Ctapchuk/android_device_xiaomi_marble-OFRP) — HAL vibrator QTI, `runatboot.sh`, dan beberapa flag OrangeFox
+- Maintainer: **kingD2N**
+
 ## To use it:
 
 ```

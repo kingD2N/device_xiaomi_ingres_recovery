@@ -54,6 +54,15 @@ if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 	# WAJIB di sini (vendorsetup.sh/script), BUKAN di BoardConfig.mk/.mk mana pun -- dikonfirmasi
 	# dari wiki resmi OrangeFox: variabel OF_/FOX_ tidak diproses sama sekali kalau ditaruh di file .mk.
 	export OF_SCREEN_H=2400
+	# Status bar (diambil dari tree marble -- layar & punch-hole tengah sama-sama 1080x2400)
+	export OF_STATUS_H=100
+	export OF_STATUS_INDENT_LEFT=48
+	export OF_STATUS_INDENT_RIGHT=48
+	export OF_CLOCK_POS=1
+
+	# Settings OrangeFox dimuat lebih awal (dari marble) -- getar/tema langsung ikut
+	# setting di /persist/OFRP sejak awal boot recovery
+	export FOX_ALLOW_EARLY_SETTINGS_LOAD=1
 
 	#OFR binary files
 	export FOX_REPLACE_BUSYBOX_PS=1
@@ -71,7 +80,15 @@ if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 	export FOX_ENABLE_APP_MANAGER=1
 
     # Maintainer (fallback build lokal -- workflow CI selalu override ini)
-   	export OF_MAINTAINER=D2N
+   	export OF_MAINTAINER=kingD2N
+
+	# Foto maintainer di halaman About (di samping nama kingD2N). PNG 192x192.
+	# Path absolut supaya tidak tergantung folder kerja saat build.
+	_ingres_tree="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+	if [ -n "$_ingres_tree" ] && [ -f "$_ingres_tree/misc/kingD2N.png" ]; then
+		export OF_MAINTAINER_AVATAR="$_ingres_tree/misc/kingD2N.png"
+	fi
+	unset _ingres_tree
 
 	# lunch dipanggil eksplisit oleh workflow CI (fox_12.1, sintaks lunch 2-part, hardcode),
 	# jadi TIDAK di-auto-lunch di sini lagi -- itu bisa tumpang tindih dgn yang workflow lakukan sendiri.

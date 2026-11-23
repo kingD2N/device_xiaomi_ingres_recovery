@@ -28,11 +28,19 @@ OF_SKIP_MULTIUSER_FOLDERS_BACKUP := 1
 OF_ENABLE_USB_STORAGE := 1
 OF_IGNORE_LOGICAL_MOUNT_ERRORS := 1
 
+# Diambil dari tree marble:
+# - setelah Format Data, /sdcard langsung di-bind-mount lagi (tidak perlu reboot recovery)
+# - format data memakai casefolding (wajib untuk emulated storage Android 11+)
+OF_BIND_MOUNT_SDCARD_ON_FORMAT := 1
+OF_FORCE_CASEFOLDING := 1
+
 #OFR settings
 OF_OPTIONS_LIST_NUM := 9
 
-# Recovery additional features	
+# Recovery additional features
 OF_ENABLE_LPTOOLS := 1
+# Dari marble: semua tool partisi (lptools, sgdisk, dll.)
+OF_ENABLE_ALL_PARTITION_TOOLS := 1
 OF_AB_DEVICE_WITH_RECOVERY_PARTITION := 1
 OF_RECOVERY_AB_FULL_REFLASH_RAMDISK := 1
 OF_DISABLE_OTA_MENU := 1
