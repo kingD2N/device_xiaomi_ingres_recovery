@@ -40,20 +40,22 @@ Works:
 - [X] USB OTG
 - [X] Vibrator
 
-## Vibrator (kombinasi ingres + marble)
+## Vibrator (pola OrangeFox-For-Marble)
 
-| Manifest build | HAL vibrator yang dipakai |
-|---|---|
-| fox_12.1 | HAL asli ingres `vendor.xiaomi.hardware.vibratorfeature` (`IVibrator/vibratorfeature`) |
-| fox_14.1 / fox_16.0 | HAL open-source QTI lineage-23.2 dari OFRP marble (`IVibrator/default`) |
+| HAL | Instance | Keterangan |
+|---|---|---|
+| Xiaomi `vibratorfeature` (prebuilt ingres) | `IVibrator/vibratorfeature` | Selalu jalan, cadangan getar dasar |
+| qcom open source (dibuild dari source manifest) | `IVibrator/default` | Efek Click/Double click/Tick/Thud/Pop/Heavy click untuk menu **Haptic feedback** |
 
-Pemilihan otomatis berdasarkan `PLATFORM_SDK_VERSION` (BoardConfig.mk) dan
-`ro.build.version.sdk` (file `.rc`). HAL QTI tidak dipakai di fox_12.1 karena
-library-nya butuh simbol libc++ `__libcpp_verbose_abort` yang belum ada di sana.
+- Workflow menambahkan nama input motor ingres (`awinic_haptic`, `aw8697_haptic`) ke source
+  `vendor/qcom/opensource/vibrator`, lalu membuat penanda `.ingres_awinic`. HAL qcom hanya
+  dibuild kalau penanda itu ada (saat ini: fox_12.1).
+- Recovery yang dipatch memilih `IVibrator/default` bila sudah terdaftar, kalau tidak memakai HAL Xiaomi.
 
 ## Credits
 
-- [Ctapchuk/android_device_xiaomi_marble-OFRP](https://github.com/Ctapchuk/android_device_xiaomi_marble-OFRP) — HAL vibrator QTI, `runatboot.sh`, dan beberapa flag OrangeFox
+- [yudharn/OrangeFox-For-Marble](https://github.com/yudharn/OrangeFox-For-Marble) — pola HAL vibrator qcom + menu Haptic feedback
+- [Ctapchuk/android_device_xiaomi_marble-OFRP](https://github.com/Ctapchuk/android_device_xiaomi_marble-OFRP) — `runatboot.sh`, dan beberapa flag OrangeFox
 - Maintainer: **kingD2N**
 
 ## To use it:

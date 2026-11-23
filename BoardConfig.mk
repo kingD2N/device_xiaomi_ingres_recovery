@@ -182,32 +182,38 @@ TW_OVERRIDE_SYSTEM_PROPS := \
     "ro.build.fingerprint=ro.vendor.build.fingerprint;ro.build.version.incremental"
 TARGET_USES_MKE2FS := true
 
-# TWRP Haptics (vibrator) -- DIAKTIFKAN LAGI, kombinasi ingres + marble
-# Dua HAL dibawa di ramdisk, dipilih otomatis sesuai manifest yang dipakai build:
-#   - fox_12.1 (SDK 30-33)       : HAL ASLI ingres, vendor.xiaomi.hardware.vibratorfeature
-#                                  (instance IVibrator/vibratorfeature).
-#   - fox_14.1/fox_16.0 (SDK>=34): HAL open-source QTI lineage-23.2 dari OFRP marble
-#                                  (instance IVibrator/default). Library-nya butuh simbol
-#                                  libc++ "__libcpp_verbose_abort" yang tidak ada di
-#                                  fox_12.1, makanya tidak dipakai di sana.
-# Service mana yang dinyalakan diatur di file .rc lewat ro.build.version.sdk (aturan SDK
-# yang SAMA dengan blok di bawah), jadi FQNAME yang dicari TWRP selalu cocok dengan HAL
-# yang benar-benar jalan. Kalau tidak cocok, TWRP akan nunggu service (UI terasa lag).
-INGRES_RECOVERY_SDK := $(strip $(PLATFORM_SDK_VERSION))
-INGRES_QTI_VIBRATOR := false
-ifneq ($(INGRES_RECOVERY_SDK),)
-INGRES_QTI_VIBRATOR := $(shell [ "$(INGRES_RECOVERY_SDK)" -ge 34 ] 2>/dev/null && echo true || echo false)
-endif
-
+# TWRP Haptics (vibrator) -- mengikuti pola OrangeFox-For-Marble (yudharn)
+# Dua HAL jalan berdampingan di recovery:
+#   1. HAL ASLI ingres  : vendor.xiaomi.hardware.vibratorfeature (IVibrator/vibratorfeature)
+#                         -- prebuilt, selalu ada, jadi getar dasar selalu jalan (cadangan).
+#   2. HAL qcom open source (IVibrator/default) -- DIBUILD DARI SOURCE vendor/qcom/opensource/vibrator
+#                         milik manifest itu sendiri (ABI libc++ pasti cocok). Workflow menambahkan
+#                         nama input "awinic_haptic"/"aw8697_haptic" (motor ingres) ke HAL ini.
+#                         HAL ini punya efek Click/Double click/Tick/Thud/Pop/Heavy click untuk
+#                         menu "Haptic feedback" (patch bootable/recovery di workflow).
+# Recovery yang sudah dipatch memilih IVibrator/default kalau sudah jalan, kalau tidak kembali ke
+# FQNAME di bawah. Recovery tanpa patch tetap memakai FQNAME (HAL Xiaomi).
 TW_SUPPORT_INPUT_AIDL_HAPTICS := true
-ifeq ($(INGRES_QTI_VIBRATOR),true)
-# HAL QTI (marble) -> instance default (FQNAME tidak diset). Selector-nya butuh libexpat.
-TARGET_RECOVERY_DEVICE_MODULES += libexpat
-RECOVERY_LIBRARY_SOURCE_FILES += $(TARGET_OUT_SHARED_LIBRARIES)/libexpat.so
-$(info ingres: SDK $(INGRES_RECOVERY_SDK) -> vibrator HAL QTI open-source (IVibrator/default))
-else
 TW_SUPPORT_INPUT_AIDL_HAPTICS_FQNAME := "IVibrator/vibratorfeature"
-$(info ingres: SDK $(INGRES_RECOVERY_SDK) -> vibrator HAL Xiaomi vibratorfeature)
+
+# HAL qcom hanya dibuild kalau workflow BERHASIL menambahkan dukungan motor awinic ke source
+# (penanda vendor/qcom/opensource/vibrator/.ingres_awinic). Tanpa itu HAL qcom tetap terdaftar
+# walau tidak menemukan motor -> recovery memilihnya -> tidak bergetar. Jadi lebih aman dilewati.
+# Penanda hanya dibuat untuk layout lama (aidl/Vibrator.cpp, fox_12.1); layout baru
+# (aidl/VibratorOL/, fox_16.0) butuh library tambahan -- dilewati, HAL Xiaomi yang dipakai.
+ifneq ($(wildcard vendor/qcom/opensource/vibrator/.ingres_awinic),)
+TARGET_RECOVERY_DEVICE_MODULES += \
+    vendor.qti.hardware.vibrator.service \
+    vendor.qti.hardware.vibrator.impl \
+    libqtivibratoreffect
+RECOVERY_BINARY_SOURCE_FILES += \
+    $(TARGET_OUT_VENDOR_EXECUTABLES)/hw/vendor.qti.hardware.vibrator.service
+RECOVERY_LIBRARY_SOURCE_FILES += \
+    $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/vendor.qti.hardware.vibrator.impl.so \
+    $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/libqtivibratoreffect.so
+$(info ingres: HAL vibrator qcom dibuild dari source (IVibrator/default) + HAL Xiaomi cadangan)
+else
+$(info ingres: source vibrator qcom layout lama tidak ada -- pakai HAL Xiaomi saja)
 endif
 TW_EXCLUDE_TWRPAPP := true
 
