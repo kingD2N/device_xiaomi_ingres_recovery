@@ -1,0 +1,1098 @@
+diff --git a/data.cpp b/data.cpp
+index aa4a5f2..9471724 100644
+--- a/data.cpp
++++ b/data.cpp
+@@ -52,6 +52,7 @@ extern "C"
+   void gui_fox_progress_overall(const int percent);
+ }
+ #include "minuitwrp/minui.h"
++#include <thread> // [ofox-haptics]
+ 
+ #define FILE_VERSION 0x00010010	// Do not set to 0
+ 
+@@ -968,6 +969,39 @@ void DataManager::SetDefaultValues()
+ 	mPersist.SetValue("tw_keyboard_vibrate", vibra_defaults.at(1));
+ 	mPersist.SetValue("tw_action_vibrate", vibra_defaults.at(2));
+ 	mConst.SetValue("tw_disable_haptics", "0");
++
++	// [ofox-haptics] efek AIDL per kategori. enable=0 -> pakai slider durasi lama.
++	// effect: 0=Click 1=Double click 2=Tick 3=Thud 4=Pop 5=Heavy click
++	// strength: 0=Light 1=Medium 2=Strong -1=Disabled
++	mPersist.SetValue("of_button_haptic_enable", "0");
++	mPersist.SetValue("of_button_haptic_effect", "0");
++	mPersist.SetValue("of_button_haptic_strength", "1");
++	mPersist.SetValue("of_keyboard_haptic_enable", "0");
++	mPersist.SetValue("of_keyboard_haptic_effect", "2");
++	mPersist.SetValue("of_keyboard_haptic_strength", "0");
++	mPersist.SetValue("of_action_haptic_enable", "0");
++	mPersist.SetValue("of_action_haptic_effect", "5");
++	mPersist.SetValue("of_action_haptic_strength", "2");
++	mData.SetValue("of_haptic_test_page", "0");
++	// 1 hanya kalau HAL vibrator melaporkan efek; diisi thread deteksi di bawah
++	mData.SetValue("of_use_haptic_effects", haptic_effects_supported() ? "1" : "0");
++	{
++		static bool haptic_probe_started = false;
++		if (!haptic_probe_started) {
++			haptic_probe_started = true;
++			// HAL vibrator bisa start belakangan dari init; tunggu maksimal ~20 detik
++			std::thread([] {
++				for (int i = 0; i < 20; i++) {
++					if (haptic_effects_supported()) {
++						DataManager::SetValue("of_use_haptic_effects", 1);
++						return;
++					}
++					usleep(1000 * 1000);
++				}
++				LOGINFO("[ofox-haptics] HAL tidak mendukung efek, pakai menu Vibration biasa\n");
++			}).detach();
++		}
++	}
+ #else
+ 	LOGINFO("TW_NO_HAPTICS := true\n");
+ 	mConst.SetValue("tw_disable_haptics", "1");
+@@ -1724,6 +1758,28 @@ string DataManager::GetSettingsStoragePath(void)
+ void DataManager::Vibrate(const string& varName)
+ {
+ #ifndef TW_NO_HAPTICS
++	// [ofox-haptics] pakai efek AIDL kalau HAL mendukung dan kategorinya diaktifkan
++	if (GetIntValue("of_use_haptic_effects") == 1) {
++		string cat = "button";
++		if (varName == "tw_keyboard_vibrate")
++			cat = "keyboard";
++		else if (varName == "tw_action_vibrate")
++			cat = "action";
++
++		// halaman "Primitive and Compose test": tombolnya sendiri jangan ikut bergetar
++		if (cat == "button" && GetIntValue("of_haptic_test_page") == 1)
++			return;
++
++		if (GetIntValue("of_" + cat + "_haptic_enable") == 1) {
++			int strength = GetIntValue("of_" + cat + "_haptic_strength");
++			if (strength < 0)
++				return;  // "Disabled"
++			if (vibrate_effect(GetIntValue("of_" + cat + "_haptic_effect"), strength) == 0)
++				return;
++			// efek gagal / tidak didukung: lanjut ke getaran durasi biasa
++		}
++	}
++
+ 	int vib_value = 0;
+ 	GetValue(varName, vib_value);
+ 	if (vib_value) {
+@@ -1732,6 +1788,42 @@ void DataManager::Vibrate(const string& varName)
+ #endif
+ }
+ 
++// [ofox-haptics] Getaran saat daftar di-scroll, meniru build OrangeFox fox_16.0 ctapchuk:
++// compose(LOW_TICK) dengan skala 0.35 + 0.55*v^2 (v = kecepatan 0..1), tick awal gesture skala 0.4,
++// jeda minimal 40 ms. HAL tanpa compose: perform(CLICK) dengan 3 tingkat kekuatan yang mendekati skala itu.
++// Hanya jalan kalau HAL punya efek dan efek tab Button aktif (strength bukan Disabled).
++// speedPct = jarak scroll per event/frame dalam persen tinggi satu item; -1 = awal gesture scroll.
++void DataManager::ScrollHaptic(int speedPct)
++{
++#ifndef TW_NO_HAPTICS
++	if (GetIntValue("of_use_haptic_effects") != 1 || GetIntValue("of_button_haptic_enable") != 1)
++		return;
++	if (GetIntValue("of_button_haptic_strength") < 0 || GetIntValue("of_haptic_test_page") == 1)
++		return;
++
++	static struct timespec last = {0, 0};
++	struct timespec now;
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	long long elapsed_ms = (now.tv_sec - last.tv_sec) * 1000LL + (now.tv_nsec - last.tv_nsec) / 1000000LL;
++	if (elapsed_ms < 40)
++		return;  // maksimal ~25 tick per detik
++	last = now;
++
++	float v = speedPct < 0 ? 0.0f : (speedPct > 100 ? 1.0f : speedPct / 100.0f);
++	float scale = speedPct < 0 ? 0.4f : 0.35f + 0.55f * v * v;
++	if (vibrate_compose_primitive(8 /* CompositePrimitive::LOW_TICK */, scale) == 0)
++		return;
++
++	// fallback tanpa compose: skala < 0.5 -> Light, < 0.75 -> Medium, sisanya Strong
++	int strength = 0;  // EffectStrength::LIGHT
++	if (speedPct >= 85)
++		strength = 2;  // STRONG
++	else if (speedPct >= 52)
++		strength = 1;  // MEDIUM
++	vibrate_effect(0 /* Effect::CLICK */, strength);
++#endif
++}
++
+ #ifdef OF_CLASSIC_LEDS_FUNCTION
+ // use R9.x Leds function
+ void DataManager::Leds(bool enable)
+diff --git a/data.hpp b/data.hpp
+index cc9dc99..d5ca6c3 100755
+--- a/data.hpp
++++ b/data.hpp
+@@ -59,6 +59,7 @@ public:
+ 	static void DumpValues();
+ 	static void update_tz_environment_variables();
+ 	static void Vibrate(const string& varName);
++	static void ScrollHaptic(int speedPct); // [ofox-haptics] tick saat list di-scroll
+ 	static void SetBackupFolder();
+ 	static void SetDefaultValues();
+ 	static void Leds(bool enable);	
+diff --git a/gui/action.cpp b/gui/action.cpp
+index bd5da25..76197d1 100644
+--- a/gui/action.cpp
++++ b/gui/action.cpp
+@@ -258,6 +258,8 @@ GUIAction::GUIAction(xml_node <> *node):GUIObject(node)
+       ADD_ACTION(unmapsuperdevices);
+       ADD_ACTION(disableled);
+       ADD_ACTION(flashlight);
++      ADD_ACTION(do_compose_haptic);   // [ofox-haptics]
++      ADD_ACTION(do_primitive_haptic); // [ofox-haptics]
+ 
+ 	  //fordownloads actions
+       ADD_ACTION(fileextension);
+@@ -1435,6 +1437,21 @@ int GUIAction::screenshotImpl(std::string arg __unused)
+ 	return 0;
+ }
+ 
++// [ofox-haptics] dipakai halaman "Primitive and Compose test"
++int GUIAction::do_compose_haptic(std::string arg)
++{
++  if (vibrate_compose_pattern(arg.c_str()) != 0)
++    LOGINFO("[ofox-haptics] compose '%s' tidak didukung HAL\n", arg.c_str());
++  return 0;
++}
++
++int GUIAction::do_primitive_haptic(std::string arg)
++{
++  if (vibrate_primitive(atoi(arg.c_str())) != 0)
++    LOGINFO("[ofox-haptics] primitive %s tidak didukung HAL\n", arg.c_str());
++  return 0;
++}
++
+ int GUIAction::setbrightness(std::string arg)
+ {
+   return TWFunc::Set_Brightness(arg);
+diff --git a/gui/objects.hpp b/gui/objects.hpp
+index 998a0be..089362a 100644
+--- a/gui/objects.hpp
++++ b/gui/objects.hpp
+@@ -590,6 +590,8 @@ protected:
+ 	int getpartitiondetails(std::string arg);
+ 	int screenshot(std::string arg) { return GUIAction::screenshotImpl(arg); }
+ 	int setbrightness(std::string arg);
++	int do_compose_haptic(std::string arg);   // [ofox-haptics]
++	int do_primitive_haptic(std::string arg); // [ofox-haptics]
+ 	int cmdf(std::string arg, std::string file);
+ 	int batch(std::string arg);
+ 	int passwordcheck(std::string arg);
+@@ -900,6 +902,7 @@ protected:
+ 	size_t selectedItem; // selected item index after the initial touch, set to -1 if we are scrolling
+ 	int touchDebounce; // debounce for touches, minimum of 6 pixels but may be larger calculated based actualItemHeight / 3
+ 	int lastY, last2Y; // last 2 touch locations, used for tracking kinetic scroll speed
++	bool ofoxScrollStarted; // [ofox-haptics] tick awal sudah diberikan untuk gesture scroll ini
+ 	int fastScroll; // indicates that the inital touch was inside the fastscroll region - makes for easier fast scrolling as the touches don't have to stay within the fast scroll region and you drag your finger
+ 	int mUpdate; // indicates that a change took place and we need to re-render
+ 
+diff --git a/gui/scrolllist.cpp b/gui/scrolllist.cpp
+index e1e62dd..5bad499 100755
+--- a/gui/scrolllist.cpp
++++ b/gui/scrolllist.cpp
+@@ -57,6 +57,7 @@ GUIScrollList::GUIScrollList(xml_node<>* node) : GUIObject(node)
+ 	mFastScrollW = mFastScrollLineW = mFastScrollRectW = mFastScrollRectH = 0;
+ 	mFastScrollRectCurrentY = mFastScrollRectCurrentH = mFastScrollRectTouchY = 0;
+ 	lastY = last2Y = fastScroll = 0;
++	ofoxScrollStarted = false; // [ofox-haptics]
+ 	mUpdate = 0;
+ 	mOverScroll = 0.0f;
+ 	mDragActive = false;
+@@ -581,7 +582,10 @@ int GUIScrollList::Update(void)
+ 	}
+ 	if (abs(scrollingSpeed) < SCROLLING_FLOOR)
+ 		scrollingSpeed = 0;
++	int prevFirstItem = firstDisplayedItem; // [ofox-haptics]
+ 	HandleScrolling();
++	if (firstDisplayedItem != prevFirstItem && actualItemHeight > 0)
++		DataManager::ScrollHaptic(abs(oldScrollingSpeed) * 100 / actualItemHeight);
+ 	mUpdate = 1;
+ 
+ 	// A fling (and any bounce it spawned) is animating - keep frames flowing.
+@@ -648,6 +652,7 @@ int GUIScrollList::NotifyTouch(TOUCH_STATE state, int x, int y)
+ 		if (selectedItem != NO_ITEM)
+ 			mUpdate = 1;
+ 		lastY = last2Y = y;
++		ofoxScrollStarted = false; // [ofox-haptics]
+ 		break;
+ 
+ 	case TOUCH_DRAG:
+@@ -688,6 +693,11 @@ int GUIScrollList::NotifyTouch(TOUCH_STATE state, int x, int y)
+ 			int dy = y - lastY; // finger delta since the last event
+ 			last2Y = lastY; // keep track of previous y locations so that we can tell how fast to scroll for kinetic scrolling
+ 			lastY = y; // update last touch to the current touch so we can tell how far and what direction we scroll for the next touch event
++			int prevFirstItem = firstDisplayedItem; // [ofox-haptics]
++			if (!ofoxScrollStarted) {
++				ofoxScrollStarted = true;
++				DataManager::ScrollHaptic(-1); // tick ringan saat gesture scroll dimulai
++			}
+ 
+ 			if (mOverScroll != 0.0f) {
+ 				// Already past an edge: extend the rubber-band (with resistance)
+@@ -714,6 +724,8 @@ int GUIScrollList::NotifyTouch(TOUCH_STATE state, int x, int y)
+ 				y_offset += dy; // adjust the scrolling offset based on the difference between the starting touch and the current touch
+ 				HandleScrolling(); // generates rubber-band via FeedOverScroll if it hits an edge
+ 			}
++			if (firstDisplayedItem != prevFirstItem && actualItemHeight > 0) // [ofox-haptics]
++				DataManager::ScrollHaptic(abs(dy) * 100 / actualItemHeight);
+ 		} else
+ 			y_offset = 0;
+ 		mUpdate = 1;
+diff --git a/gui/theme/common/languages/en.xml b/gui/theme/common/languages/en.xml
+index d798317..cfe84a6 100644
+--- a/gui/theme/common/languages/en.xml
++++ b/gui/theme/common/languages/en.xml
+@@ -272,6 +272,34 @@
+ 		<string name="button_vibration">Button Vibration:</string>
+ 		<string name="kb_vibration">Keyboard Vibration:</string>
+ 		<string name="act_vibration">Action Vibration:</string>
++		<!-- [ofox-haptics] -->
++		<string name="haptic_hdr">Haptic feedback</string>
++		<string name="haptic_button_tab">Button</string>
++		<string name="haptic_kb_tab">Keyboard</string>
++		<string name="haptic_act_tab">Action</string>
++		<string name="haptic_switch_button">Enable effects</string>
++		<string name="haptic_effects">Effects</string>
++		<string name="haptic_strength">Effect strength</string>
++		<string name="haptic_effect_click">Click</string>
++		<string name="haptic_effect_dclick">Double click</string>
++		<string name="haptic_effect_tick">Tick</string>
++		<string name="haptic_effect_thud">Thud</string>
++		<string name="haptic_effect_pop">Pop</string>
++		<string name="haptic_effect_hclick">Heavy click</string>
++		<string name="haptic_strength_strong">Strong</string>
++		<string name="haptic_strength_medium">Medium</string>
++		<string name="haptic_strength_light">Light</string>
++		<string name="haptic_strength_disabled">Disabled</string>
++		<string name="haptic_test_hdr">Primitive and Compose test</string>
++		<string name="haptic_compose_success">Compose success</string>
++		<string name="haptic_compose_error">Compose error</string>
++		<string name="haptic_compose_warning">Compose warning</string>
++		<string name="haptic_prim_spin">Spin</string>
++		<string name="haptic_prim_quick_rise">Quick rise</string>
++		<string name="haptic_prim_slow_rise">Slow rise</string>
++		<string name="haptic_prim_quick_fall">Quick fall</string>
++		<string name="haptic_prim_light_tick">Light tick</string>
++		<string name="haptic_prim_low_tick">Low tick</string>
+ 		<string name="advanced_hdr">Advanced</string>
+ 		<string name="copy_log_confirm">Copy Log to SD Card</string>
+ 		<string name="copying_log">Copying Log to SD Card...</string>
+diff --git a/gui/theme/portrait_hdpi/pages/settings.xml b/gui/theme/portrait_hdpi/pages/settings.xml
+index db82784..785d904 100644
+--- a/gui/theme/portrait_hdpi/pages/settings.xml
++++ b/gui/theme/portrait_hdpi/pages/settings.xml
+@@ -53,8 +53,23 @@
+ 				<listitem name="{@vibration_hdr}">
+ 					<icon res="bs_btn_set_vibro"/>
+ 					<condition var1="tw_disable_haptics" op="!=" var2="1"/>
++					<condition var1="of_use_haptic_effects" op="!=" var2="1"/>
+ 					<action function="page">ext_vibrate</action>
+ 				</listitem>
++				<!-- [ofox-haptics] -->
++				<listitem name="{@haptic_hdr}">
++					<icon res="bs_btn_set_vibro"/>
++					<condition var1="tw_disable_haptics" op="!=" var2="1"/>
++					<condition var1="of_use_haptic_effects" var2="1"/>
++					<action function="page">ext_haptic</action>
++				</listitem>
++				<listitem name="{@haptic_test_hdr}">
++					<icon res="bs_btn_set_vibro"/>
++					<condition var1="tw_disable_haptics" op="!=" var2="1"/>
++					<condition var1="of_use_haptic_effects" var2="1"/>
++					<action function="set">of_haptic_test_page=1</action>
++					<action function="page">ext_haptic_primitive</action>
++				</listitem>
+ 				<listitem name="{@backup_hdr}">
+ 					<icon res="bs_btn_restore"/>
+ 					<action function="set">backup_back=settings</action>
+@@ -639,6 +654,512 @@
+ 			</action>
+ 		</page>
+ 
++		<!-- [ofox-haptics] Haptic feedback (di-port dari OrangeFox fox_16.0) -->
++		<page name="ext_haptic">
++			<template name="body"/>
++			<template name="tabs"/>
++			<template name="actionbar_back"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@haptic_hdr}</text>
++			</text>
++
++			<button style="tab_btn_hl">
++				<placement x="0" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_button_tab}</text>
++			</button>
++
++			<button style="tab_btn">
++				<placement x="360" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_kb_tab}</text>
++				<action function="page">ext_haptic_kb</action>
++			</button>
++
++			<button style="tab_btn">
++				<placement x="720" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_act_tab}</text>
++				<action function="page">ext_haptic_act</action>
++			</button>
++
++			<image style="tab">
++				<placement x="24" y="%tab_title_h%" placement="2"/>
++			</image>
++
++			<image>
++				<condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_active"/>
++			</image>
++
++			<image>
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_not_active"/>
++			</image>
++
++			<image style="switch_on">
++				<condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<image style="switch_off">
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<text style="text_ab_switch_on">
++				<condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<text style="text_ab_switch_off">
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<button style="bs_btn">
++				<condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_button_haptic_enable=0</action>
++			</button>
++
++			<button style="bs_btn">
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_button_haptic_enable=1</action>
++			</button>
++
++			<text style="text_body1">
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<condition var1="tw_button_vibrate" op="!=" var2="0"/>
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<text>{@button_vibration} %tw_button_vibrate%</text>
++			</text>
++
++			<text style="text_body1">
++				<condition var1="tw_button_vibrate" var2="0"/>
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="%col1_x_caption%" y="%row3_2_y%"/>
++				<text>{@button_vibration_hdr}</text>
++			</text>
++
++			<slidervalue>
++				<condition var1="of_button_haptic_enable" op="!=" var2="1"/>
++				<placement x="%slider_x%" y="%row3_3_y%" w="%slidervalue_w%"/>
++				<data variable="tw_button_vibrate" min="0" max="300" showrange="0" showcurr="0" changeondrag="1"/>
++			</slidervalue>
++
++			<text style="caption">
++			  <condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<text>{@haptic_effects}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="0" y="%row3_3_y%" w="%screen_w%" h="%lb_group_l6%"/>
++				<data name="of_button_haptic_effect"/>
++				<listitem name="{@haptic_effect_click}">0</listitem>
++				<listitem name="{@haptic_effect_dclick}">1</listitem>
++				<listitem name="{@haptic_effect_tick}">2</listitem>
++				<listitem name="{@haptic_effect_thud}">3</listitem>
++				<listitem name="{@haptic_effect_pop}">4</listitem>
++				<listitem name="{@haptic_effect_hclick}">5</listitem>
++			</listbox>
++
++			<text style="caption">
++			  <condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row7_2_y%"/>
++				<text>{@haptic_strength}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_button_haptic_enable" var2="1"/>
++				<placement x="0" y="%row7_3_y%" w="%screen_w%" h="%lb_group_l4%"/>
++				<data name="of_button_haptic_strength"/>
++				<listitem name="{@haptic_strength_strong}">2</listitem>
++				<listitem name="{@haptic_strength_medium}">1</listitem>
++				<listitem name="{@haptic_strength_light}">0</listitem>
++				<listitem name="{@haptic_strength_disabled}">-1</listitem>
++			</listbox>
++
++			<template name="gestures"/>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">settings</action>
++			</action>
++		</page>
++		<page name="ext_haptic_kb">
++			<template name="body"/>
++			<template name="tabs"/>
++			<template name="actionbar_back"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@haptic_hdr}</text>
++			</text>
++
++			<button style="tab_btn">
++				<placement x="0" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_button_tab}</text>
++				<action function="page">ext_haptic</action>
++			</button>
++
++			<button style="tab_btn_hl">
++				<placement x="360" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_kb_tab}</text>
++			</button>
++
++			<button style="tab_btn">
++				<placement x="720" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_act_tab}</text>
++				<action function="page">ext_haptic_act</action>
++			</button>
++
++			<image style="tab">
++				<placement x="384" y="%tab_title_h%" placement="2"/>
++			</image>
++
++			<image>
++				<condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_active"/>
++			</image>
++
++			<image>
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_not_active"/>
++			</image>
++
++			<image style="switch_on">
++				<condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<image style="switch_off">
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<text style="text_ab_switch_on">
++				<condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<text style="text_ab_switch_off">
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<button style="bs_btn">
++				<condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_keyboard_haptic_enable=0</action>
++			</button>
++
++			<button style="bs_btn">
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_keyboard_haptic_enable=1</action>
++			</button>
++
++			<text style="text_body1">
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<condition var1="tw_keyboard_vibrate" op="!=" var2="0"/>
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<text>{@kb_vibration} %tw_keyboard_vibrate%</text>
++			</text>
++
++			<text style="text_body1">
++				<condition var1="tw_keyboard_vibrate" var2="0"/>
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<text>{@kb_vibration_hdr}</text>
++			</text>
++
++			<slidervalue>
++				<condition var1="of_keyboard_haptic_enable" op="!=" var2="1"/>
++				<placement x="%slider_x%" y="%row3_3_y%" w="%slidervalue_w%"/>
++				<data variable="tw_keyboard_vibrate" min="0" max="300" showrange="0" showcurr="0" changeondrag="1"/>
++			</slidervalue>
++
++			<text style="caption">
++			  <condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<text>{@haptic_effects}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="0" y="%row3_3_y%" w="%screen_w%" h="%lb_group_l6%"/>
++				<data name="of_keyboard_haptic_effect"/>
++				<listitem name="{@haptic_effect_click}">0</listitem>
++				<listitem name="{@haptic_effect_dclick}">1</listitem>
++				<listitem name="{@haptic_effect_tick}">2</listitem>
++				<listitem name="{@haptic_effect_thud}">3</listitem>
++				<listitem name="{@haptic_effect_pop}">4</listitem>
++				<listitem name="{@haptic_effect_hclick}">5</listitem>
++			</listbox>
++
++			<text style="caption">
++			  <condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row7_2_y%"/>
++				<text>{@haptic_strength}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_keyboard_haptic_enable" var2="1"/>
++				<placement x="0" y="%row7_3_y%" w="%screen_w%" h="%lb_group_l4%"/>
++				<data name="of_keyboard_haptic_strength"/>
++				<listitem name="{@haptic_strength_strong}">2</listitem>
++				<listitem name="{@haptic_strength_medium}">1</listitem>
++				<listitem name="{@haptic_strength_light}">0</listitem>
++				<listitem name="{@haptic_strength_disabled}">-1</listitem>
++			</listbox>
++
++			<template name="gestures"/>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">settings</action>
++			</action>
++		</page>
++		<page name="ext_haptic_act">
++			<template name="body"/>
++			<template name="tabs"/>
++			<template name="actionbar_back"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@haptic_hdr}</text>
++			</text>
++
++			<button style="tab_btn">
++				<placement x="0" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_button_tab}</text>
++				<action function="page">ext_haptic</action>
++			</button>
++
++			<button style="tab_btn">
++				<placement x="360" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_kb_tab}</text>
++				<action function="page">ext_haptic_kb</action>
++			</button>
++
++			<button style="tab_btn_hl">
++				<placement x="720" y="%tab_btn_y%" w="360" h="84"/>
++				<text>{@haptic_act_tab}</text>
++			</button>
++
++			<image style="tab">
++				<placement x="744" y="%tab_title_h%" placement="2"/>
++			</image>
++
++			<image>
++				<condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_active"/>
++			</image>
++
++			<image>
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="40" y="%ab_ex_h%"/>
++				<image resource="main_switch_card_not_active"/>
++			</image>
++
++			<image style="switch_on">
++				<condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<image style="switch_off">
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="%main_switch_icon_x%" y="%ab3_y%" placement="4"/>
++			</image>
++
++			<text style="text_ab_switch_on">
++				<condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<text style="text_ab_switch_off">
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="%switch_text_x%" y="%ab_bc3_y%"/>
++				<text>{@haptic_switch_button}</text>
++			</text>
++
++			<button style="bs_btn">
++				<condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_action_haptic_enable=0</action>
++			</button>
++
++			<button style="bs_btn">
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="0" y="%ab_ex_h%" w="%screen_w%" h="%ab_btn_h%"/>
++				<action function="set">of_action_haptic_enable=1</action>
++			</button>
++
++			<text style="text_body1">
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<condition var1="tw_action_vibrate" op="!=" var2="0"/>
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<text>{@act_vibration} %tw_action_vibrate%</text>
++			</text>
++
++			<text style="text_body1">
++				<condition var1="tw_action_vibrate" var2="0"/>
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<text>{@act_vibration_hdr}</text>
++			</text>
++
++			<slidervalue>
++				<condition var1="of_action_haptic_enable" op="!=" var2="1"/>
++				<placement x="%slider_x%" y="%row3_3_y%" w="%slidervalue_w%"/>
++				<data variable="tw_action_vibrate" min="0" max="500" showrange="0" showcurr="0" changeondrag="1"/>
++			</slidervalue>
++
++			<text style="caption">
++			  <condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row3_2_y%"/>
++				<text>{@haptic_effects}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="0" y="%row3_3_y%" w="%screen_w%" h="%lb_group_l6%"/>
++				<data name="of_action_haptic_effect"/>
++				<listitem name="{@haptic_effect_click}">0</listitem>
++				<listitem name="{@haptic_effect_dclick}">1</listitem>
++				<listitem name="{@haptic_effect_tick}">2</listitem>
++				<listitem name="{@haptic_effect_thud}">3</listitem>
++				<listitem name="{@haptic_effect_pop}">4</listitem>
++				<listitem name="{@haptic_effect_hclick}">5</listitem>
++			</listbox>
++
++			<text style="caption">
++			  <condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="%gl_text_x%" y="%row7_2_y%"/>
++				<text>{@haptic_strength}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++			  <condition var1="of_action_haptic_enable" var2="1"/>
++				<placement x="0" y="%row7_3_y%" w="%screen_w%" h="%lb_group_l4%"/>
++				<data name="of_action_haptic_strength"/>
++				<listitem name="{@haptic_strength_strong}">2</listitem>
++				<listitem name="{@haptic_strength_medium}">1</listitem>
++				<listitem name="{@haptic_strength_light}">0</listitem>
++				<listitem name="{@haptic_strength_disabled}">-1</listitem>
++			</listbox>
++
++			<template name="gestures"/>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">settings</action>
++			</action>
++		</page>
++		<page name="ext_haptic_primitive">
++			<template name="base"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@haptic_test_hdr}</text>
++			</text>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_1_y%" placement="4"/>
++				<text>{@haptic_compose_success}</text>
++				<action function="do_compose_haptic">success</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_2_y%" placement="4"/>
++				<text>{@haptic_compose_error}</text>
++				<action function="do_compose_haptic">error</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_3_y%" placement="4"/>
++				<text>{@haptic_compose_warning}</text>
++				<action function="do_compose_haptic">warning</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_4_y%" placement="4"/>
++				<text>{@haptic_prim_spin}</text>
++				<action function="do_primitive_haptic">3</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_5_y%" placement="4"/>
++				<text>{@haptic_prim_quick_rise}</text>
++				<action function="do_primitive_haptic">4</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_6_y%" placement="4"/>
++				<text>{@haptic_prim_slow_rise}</text>
++				<action function="do_primitive_haptic">5</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_7_y%" placement="4"/>
++				<text>{@haptic_prim_quick_fall}</text>
++				<action function="do_primitive_haptic">6</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_8_y%" placement="4"/>
++				<text>{@haptic_prim_light_tick}</text>
++				<action function="do_primitive_haptic">7</action>
++			</button>
++
++			<button style="btn_raised_hl">
++				<placement x="%center_x%" y="%btn_9_y%" placement="4"/>
++				<text>{@haptic_prim_low_tick}</text>
++				<action function="do_primitive_haptic">8</action>
++			</button>
++
++			<template name="gestures"/>
++			<action>
++				<touch key="home"/>
++				<action function="set">of_haptic_test_page=0</action>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="set">of_haptic_test_page=0</action>
++				<action function="page">settings</action>
++			</action>
++		</page>
++
+ 		<!-- Backup -->
+ 		<page name="ext_backup">
+ 			<template name="base"/>
+diff --git a/gui/theme/portrait_hdpi/resources/vars.xml b/gui/theme/portrait_hdpi/resources/vars.xml
+index 8678f38..ba70937 100644
+--- a/gui/theme/portrait_hdpi/resources/vars.xml
++++ b/gui/theme/portrait_hdpi/resources/vars.xml
+@@ -472,6 +472,16 @@
+ 
+ 		<variable name="ab_back_x" value="84"/>
+ 		<variable name="ab_bc_y" value="115+%cutout_w%"/>
++		<!-- [ofox-haptics] -->
++		<variable name="btn_1_y" value="265+%cutout_w%"/>
++		<variable name="btn_2_y" value="409+%cutout_w%"/>
++		<variable name="btn_3_y" value="553+%cutout_w%"/>
++		<variable name="btn_4_y" value="697+%cutout_w%"/>
++		<variable name="btn_5_y" value="841+%cutout_w%"/>
++		<variable name="btn_6_y" value="985+%cutout_w%"/>
++		<variable name="btn_7_y" value="1129+%cutout_w%"/>
++		<variable name="btn_8_y" value="1273+%cutout_w%"/>
++		<variable name="btn_9_y" value="1417+%cutout_w%"/>
+ 		<variable name="ab_bc_fox_y" value="115+%cutout_w%"/>
+ 		<variable name="ab_bc_search_y" value="128+%cutout_w%"/>
+ 		<variable name="ab_bc2_y" value="282+%cutout_w%"/>
+diff --git a/minuitwrp/events.cpp b/minuitwrp/events.cpp
+index e497df6..b94c37b 100644
+--- a/minuitwrp/events.cpp
++++ b/minuitwrp/events.cpp
+@@ -38,6 +38,7 @@
+ #ifdef USE_QTI_AIDL_HAPTICS
+ #include <aidl/android/hardware/vibrator/IVibrator.h>
+ #include <android/binder_manager.h>
++#include <atomic> // [ofox-haptics]
+ using ::aidl::android::hardware::vibrator::IVibrator;
+ #ifdef USE_QTI_AIDL_HAPTICS_FQNAME
+ static const std::string kVibratorInstance = std::string("android.hardware.vibrator.") + USE_QTI_AIDL_HAPTICS_FQNAME;
+@@ -47,6 +48,24 @@ static const std::string kVibratorInstance = std::string(IVibrator::descriptor)
+ #ifdef USE_QTI_AIDL_HAPTICS_FIX_OFF
+ static std::atomic_int vib_on_count = 0;
+ #endif
++
++// [ofox-haptics] Pilih instance HAL saat runtime: utamakan IVibrator/default (HAL qcom, punya efek),
++// kalau belum/tidak jalan pakai instance dari TW_SUPPORT_INPUT_AIDL_HAPTICS_FQNAME seperti sebelumnya.
++// AServiceManager_checkService tidak memblok, jadi tidak membuat tombol terasa macet.
++static std::string haptic_pick_instance() {
++    static const std::string kDefault = std::string(IVibrator::descriptor) + "/default";
++    static std::atomic_bool default_found = false;
++    if (default_found) return kDefault;
++    if (kDefault != kVibratorInstance) {
++        ndk::SpAIBinder b(AServiceManager_checkService(kDefault.c_str()));
++        if (b.get() != nullptr) {
++            default_found = true;
++            printf("I:[ofox-haptics] pakai HAL %s\n", kDefault.c_str());
++            return kDefault;
++        }
++    }
++    return kVibratorInstance;
++}
+ #endif
+ 
+ #include "common.h"
+@@ -159,7 +178,7 @@ int vibrate(int timeout_ms)
+         vib->on((uint32_t)timeout_ms);
+     }
+ #elif defined(USE_QTI_AIDL_HAPTICS)
+-    std::shared_ptr<IVibrator> vib = IVibrator::fromBinder(ndk::SpAIBinder(AServiceManager_getService(kVibratorInstance.c_str())));
++    std::shared_ptr<IVibrator> vib = IVibrator::fromBinder(ndk::SpAIBinder(AServiceManager_getService(haptic_pick_instance().c_str()))); // [ofox-haptics]
+     if (vib != nullptr) {
+ #ifdef USE_QTI_AIDL_HAPTICS_FIX_OFF
+         std::thread([vib, timeout_ms] {
+@@ -193,6 +212,186 @@ int vibrate(int timeout_ms)
+ #endif
+ #endif
+ 
++/* [ofox-haptics] Efek haptic AIDL: IVibrator::perform() untuk Click/Tick/Pop/...,
++ * compose() untuk primitive. HAL dicek saat runtime; kalau tidak mendukung efek,
++ * semua fungsi mengembalikan -1 dan pemanggil kembali ke vibrate(durasi). */
++#if !defined(TW_NO_HAPTICS) && defined(USE_QTI_AIDL_HAPTICS)
++#include <android/binder_ibinder.h>
++#include <algorithm>
++#include <mutex>
++#include <vector>
++using ::aidl::android::hardware::vibrator::CompositeEffect;
++using ::aidl::android::hardware::vibrator::CompositePrimitive;
++using ::aidl::android::hardware::vibrator::Effect;
++using ::aidl::android::hardware::vibrator::EffectStrength;
++
++static std::mutex haptic_lock;
++static std::shared_ptr<IVibrator> haptic_vib;
++static std::string haptic_vib_name;
++static int haptic_state = -1;  // -1 belum dicek, 0 tidak didukung, 1 didukung
++static int32_t haptic_caps = 0;
++static std::vector<Effect> haptic_effects;
++static std::vector<CompositePrimitive> haptic_primitives;
++
++// Panggil dengan haptic_lock terkunci. Tidak memblok: kalau HAL belum terdaftar, kembali nullptr.
++static std::shared_ptr<IVibrator> haptic_get_vib_locked() {
++    const std::string name = haptic_pick_instance();
++    if (haptic_vib != nullptr) {
++        // HAL restart, atau HAL qcom baru muncul setelah HAL lain: cek ulang kemampuannya
++        if (name == haptic_vib_name && AIBinder_isAlive(haptic_vib->asBinder().get())) return haptic_vib;
++        haptic_vib = nullptr;
++        haptic_state = -1;
++    }
++    ndk::SpAIBinder binder(AServiceManager_checkService(name.c_str()));
++    if (binder.get() == nullptr) return nullptr;
++    haptic_vib = IVibrator::fromBinder(binder);
++    haptic_vib_name = name;
++    return haptic_vib;
++}
++
++static void haptic_probe_locked() {
++    // haptic_get_vib_locked() me-reset haptic_state kalau HAL berganti/restart
++    std::shared_ptr<IVibrator> vib = haptic_get_vib_locked();
++    if (vib == nullptr) return;  // HAL belum jalan, dicoba lagi di panggilan berikutnya
++    if (haptic_state != -1) return;  // HAL ini sudah dicek
++
++    int32_t caps = 0;
++    if (!vib->getCapabilities(&caps).isOk()) caps = 0;
++    std::vector<Effect> effects;
++    if (!vib->getSupportedEffects(&effects).isOk()) effects.clear();
++    std::vector<CompositePrimitive> prims;
++    if ((caps & IVibrator::CAP_COMPOSE_EFFECTS) && !vib->getSupportedPrimitives(&prims).isOk())
++        prims.clear();
++
++    haptic_caps = caps;
++    haptic_effects = effects;
++    haptic_primitives = prims;
++    haptic_state = effects.empty() ? 0 : 1;
++
++    std::string e, p;
++    for (auto x : effects) e += std::to_string(static_cast<int>(x)) + " ";
++    for (auto x : prims) p += std::to_string(static_cast<int>(x)) + " ";
++    printf("I:[ofox-haptics] %s caps=0x%x effects=[ %s] primitives=[ %s] -> %s\n",
++           haptic_vib_name.c_str(), caps, e.c_str(), p.c_str(),
++           haptic_state == 1 ? "effects ON" : "effects OFF");
++}
++
++static void haptic_schedule_off(std::shared_ptr<IVibrator> vib, int ms) {
++#ifdef USE_QTI_AIDL_HAPTICS_FIX_OFF
++    // HAL ini tidak selalu mematikan motor sendiri (lihat vibrate() di atas)
++    if (ms <= 0 || ms > 5000) ms = 50;
++    vib_on_count++;
++    std::thread([vib, ms] {
++        usleep((ms + 10) * 1000);
++        vib_on_count--;
++        if (!vib_on_count) (void)vib->off();
++    }).detach();
++#else
++    (void)vib;
++    (void)ms;
++#endif
++}
++
++int haptic_effects_supported(void) {
++    std::lock_guard<std::mutex> l(haptic_lock);
++    haptic_probe_locked();
++    return haptic_state == 1 ? 1 : 0;
++}
++
++int vibrate_effect(int effect, int strength) {
++    std::shared_ptr<IVibrator> vib;
++    {
++        std::lock_guard<std::mutex> l(haptic_lock);
++        haptic_probe_locked();
++        if (haptic_state != 1 || haptic_vib == nullptr) return -1;
++        Effect e = static_cast<Effect>(effect);
++        if (std::find(haptic_effects.begin(), haptic_effects.end(), e) == haptic_effects.end())
++            return -1;
++        vib = haptic_vib;
++    }
++    if (strength < 0) strength = 0;
++    if (strength > 2) strength = 2;
++    int32_t dur = 0;
++    if (!vib->perform(static_cast<Effect>(effect), static_cast<EffectStrength>(strength), nullptr, &dur).isOk())
++        return -1;
++    haptic_schedule_off(vib, dur);
++    return 0;
++}
++
++static CompositeEffect haptic_step(CompositePrimitive p, float scale, int delay_ms) {
++    CompositeEffect c;
++    c.delayMs = delay_ms;
++    c.primitive = p;
++    c.scale = scale;
++    return c;
++}
++
++static int haptic_compose(const std::vector<CompositeEffect>& comp) {
++    std::shared_ptr<IVibrator> vib;
++    {
++        std::lock_guard<std::mutex> l(haptic_lock);
++        haptic_probe_locked();
++        if (haptic_vib == nullptr || !(haptic_caps & IVibrator::CAP_COMPOSE_EFFECTS)) return -1;
++        for (const auto& c : comp) {
++            if (std::find(haptic_primitives.begin(), haptic_primitives.end(), c.primitive) ==
++                haptic_primitives.end())
++                return -1;
++        }
++        vib = haptic_vib;
++    }
++    if (!vib->compose(comp, nullptr).isOk()) return -1;
++    int total = 0;
++    for (const auto& c : comp) {
++        int32_t d = 0;
++        if (!vib->getPrimitiveDuration(c.primitive, &d).isOk()) d = 20;
++        total += c.delayMs + d;
++    }
++    haptic_schedule_off(vib, total);
++    return 0;
++}
++
++int vibrate_primitive(int primitive) {
++    return vibrate_compose_primitive(primitive, 1.0f);
++}
++
++int vibrate_compose_primitive(int primitive, float scale) {
++    if (primitive < 1 || primitive > static_cast<int>(CompositePrimitive::LOW_TICK)) return -1;
++    if (scale < 0.0f) scale = 0.0f;
++    if (scale > 1.0f) scale = 1.0f;
++    return haptic_compose({haptic_step(static_cast<CompositePrimitive>(primitive), scale, 0)});
++}
++
++int vibrate_compose_pattern(const char* name) {
++    const std::string n = name ? name : "";
++    std::vector<CompositeEffect> c;
++    if (n == "success") {
++        c = {haptic_step(CompositePrimitive::CLICK, 0.5f, 0),
++             haptic_step(CompositePrimitive::CLICK, 1.0f, 100)};
++    } else if (n == "warning") {
++        c = {haptic_step(CompositePrimitive::CLICK, 1.0f, 0),
++             haptic_step(CompositePrimitive::CLICK, 0.5f, 100)};
++    } else if (n == "error") {
++        c = {haptic_step(CompositePrimitive::CLICK, 0.6f, 0),
++             haptic_step(CompositePrimitive::CLICK, 0.6f, 80),
++             haptic_step(CompositePrimitive::CLICK, 1.0f, 80),
++             haptic_step(CompositePrimitive::CLICK, 0.6f, 80)};
++    } else {
++        return -1;
++    }
++    if (haptic_compose(c) == 0) return 0;
++    // HAL tanpa compose: pakai efek bawaan yang paling mirip
++    if (n == "success") return vibrate_effect(static_cast<int>(Effect::DOUBLE_CLICK), 2);
++    if (n == "warning") return vibrate_effect(static_cast<int>(Effect::HEAVY_CLICK), 1);
++    return vibrate_effect(static_cast<int>(Effect::THUD), 2);
++}
++#else
++int haptic_effects_supported(void) { return 0; }
++int vibrate_effect(int, int) { return -1; }
++int vibrate_primitive(int) { return -1; }
++int vibrate_compose_pattern(const char*) { return -1; }
++int vibrate_compose_primitive(int, float) { return -1; }
++#endif
++
+ /* Returns empty tokens */
+ static char *vk_strtok_r(char *str, const char *delim, char **save_str)
+ {
+diff --git a/minuitwrp/include/minuitwrp/minui.h b/minuitwrp/include/minuitwrp/minui.h
+index ac841af..a44a78c 100644
+--- a/minuitwrp/include/minuitwrp/minui.h
++++ b/minuitwrp/include/minuitwrp/minui.h
+@@ -110,4 +110,15 @@ int res_scale_surface(gr_surface source, gr_surface* destination, float scale_w,
+ 
+ int vibrate(int timeout_ms);
+ 
++// [ofox-haptics] Efek haptic AIDL (IVibrator::perform / compose).
++// Semua fungsi mengembalikan 0 kalau berhasil, negatif kalau tidak didukung
++// (pemanggil lalu kembali ke vibrate(durasi) biasa).
++// effect   : nilai android.hardware.vibrator.Effect (0=CLICK .. 5=HEAVY_CLICK)
++// strength : nilai EffectStrength (0=LIGHT, 1=MEDIUM, 2=STRONG)
++int haptic_effects_supported(void);          // 1 = didukung, 0 = tidak / HAL belum ada
++int vibrate_effect(int effect, int strength);
++int vibrate_primitive(int primitive);        // CompositePrimitive (1=CLICK .. 8=LOW_TICK)
++int vibrate_compose_pattern(const char* name); // "success", "error", "warning"
++int vibrate_compose_primitive(int primitive, float scale); // satu primitive dengan skala 0..1
++
+ #endif
