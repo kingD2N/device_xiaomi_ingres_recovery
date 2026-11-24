@@ -197,6 +197,10 @@ TARGET_USES_MKE2FS := true
 # FQNAME di bawah. Recovery tanpa patch tetap memakai FQNAME (HAL Xiaomi).
 TW_SUPPORT_INPUT_AIDL_HAPTICS := true
 TW_SUPPORT_INPUT_AIDL_HAPTICS_FQNAME := "IVibrator/vibratorfeature"
+# Panggil HAL vibrator di thread terpisah lalu off() setelah durasi habis (sama seperti tree marble).
+# Tanpa ini vibrate() memanggil on() di thread UI; HAL Xiaomi ingres memblok sampai getaran selesai
+# -> touchscreen lag selama vibrator aktif (laporan uji OFOX fox_16.0, 25-11-2026).
+TW_SUPPORT_INPUT_AIDL_HAPTICS_FIX_OFF := true
 
 # HAL qcom hanya dibuild kalau workflow BERHASIL menambahkan dukungan motor awinic ke source
 # (penanda vendor/qcom/opensource/vibrator/.ingres_awinic). Tanpa itu HAL qcom tetap terdaftar

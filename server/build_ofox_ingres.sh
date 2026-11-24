@@ -213,6 +213,66 @@ if [ -n "$HAPTIC_DIR" ]; then
   done
 fi
 
+# Haptic: panggilan HAL efek (perform/compose) dipindah ke thread terpisah.
+# HAL vibrator Xiaomi ingres memblok sampai getaran selesai; kalau dipanggil di thread UI,
+# setiap sentuhan menunggu HAL -> touchscreen terasa lag selama vibrator aktif.
+# (vibrate() biasa ditangani TW_SUPPORT_INPUT_AIDL_HAPTICS_FIX_OFF di BoardConfig.mk.)
+if [ "$HAPTIC_MENU" = "Menu Haptic feedback" ]; then
+  python3 - "bootable/recovery/minuitwrp/events.cpp" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if "[ingres-async]" in s:
+    print("events.cpp: haptic async sudah terpasang")
+    sys.exit(0)
+done = 0
+old = """    int32_t dur = 0;
+    if (!vib->perform(static_cast<Effect>(effect), static_cast<EffectStrength>(strength), nullptr, &dur).isOk())
+        return -1;
+    haptic_schedule_off(vib, dur);
+    return 0;"""
+new = """    // [ingres-async] perform() di thread terpisah supaya UI/touch tidak menunggu HAL
+    std::thread([vib, effect, strength] {
+        int32_t dur = 0;
+        if (vib->perform(static_cast<Effect>(effect), static_cast<EffectStrength>(strength), nullptr, &dur).isOk())
+            haptic_schedule_off(vib, dur);
+    }).detach();
+    return 0;"""
+if s.count(old) == 1:
+    s = s.replace(old, new); done += 1
+old = """    if (!vib->compose(comp, nullptr).isOk()) return -1;
+    int total = 0;
+    for (const auto& c : comp) {
+        int32_t d = 0;
+        if (!vib->getPrimitiveDuration(c.primitive, &d).isOk()) d = 20;
+        total += c.delayMs + d;
+    }
+    haptic_schedule_off(vib, total);
+    return 0;"""
+new = """    // [ingres-async] compose() di thread terpisah supaya UI/touch tidak menunggu HAL
+    std::thread([vib, comp] {
+        if (!vib->compose(comp, nullptr).isOk()) return;
+        int total = 0;
+        for (const auto& c : comp) {
+            int32_t d = 0;
+            if (!vib->getPrimitiveDuration(c.primitive, &d).isOk()) d = 20;
+            total += c.delayMs + d;
+        }
+        haptic_schedule_off(vib, total);
+    }).detach();
+    return 0;"""
+if s.count(old) == 1:
+    s = s.replace(old, new); done += 1
+if done == 2:
+    if "#include <thread>" not in s:
+        s = s.replace("#include <atomic> // [ofox-haptics]", "#include <atomic> // [ofox-haptics]\n#include <thread> // [ingres-async]", 1)
+    open(p, "w").write(s)
+    print("events.cpp: perform()/compose() dipindah ke thread (anti-lag)")
+else:
+    print("PERINGATAN: pola perform/compose tidak ketemu (%d/2) -- events.cpp tidak diubah" % done)
+PY
+fi
+
 # Haptic: motor awinic ingres di HAL qcom (hanya layout lama, fox_12.1)
 HAPTIC_HAL="Xiaomi"
 V=vendor/qcom/opensource/vibrator; F="$V/aidl/Vibrator.cpp"
