@@ -222,10 +222,16 @@ if [ "$HAPTIC_MENU" = "Menu Haptic feedback" ]; then
 import sys
 p = sys.argv[1]
 s = open(p).read()
-if "[ingres-async]" in s:
-    print("events.cpp: haptic async sudah terpasang")
-    sys.exit(0)
-done = 0
+changed = []
+
+# 1) vibrate(): AServiceManager_getService MENUNGGU (sampai beberapa detik) kalau HAL belum/tidak
+#    terdaftar -> setiap sentuhan tertahan. checkService langsung kembali; kalau HAL tidak ada, lewati getar.
+old = "IVibrator::fromBinder(ndk::SpAIBinder(AServiceManager_getService(haptic_pick_instance().c_str()))); // [ofox-haptics]"
+new = "IVibrator::fromBinder(ndk::SpAIBinder(AServiceManager_checkService(haptic_pick_instance().c_str()))); // [ofox-haptics] [ingres-nonblock]"
+if "[ingres-nonblock]" not in s and s.count(old) == 1:
+    s = s.replace(old, new); changed.append("vibrate() checkService")
+
+# 2) vibrate_effect(): perform() di thread terpisah
 old = """    int32_t dur = 0;
     if (!vib->perform(static_cast<Effect>(effect), static_cast<EffectStrength>(strength), nullptr, &dur).isOk())
         return -1;
@@ -239,7 +245,9 @@ new = """    // [ingres-async] perform() di thread terpisah supaya UI/touch tida
     }).detach();
     return 0;"""
 if s.count(old) == 1:
-    s = s.replace(old, new); done += 1
+    s = s.replace(old, new); changed.append("perform async")
+
+# 3) haptic_compose(): compose() di thread terpisah
 old = """    if (!vib->compose(comp, nullptr).isOk()) return -1;
     int total = 0;
     for (const auto& c : comp) {
@@ -262,14 +270,15 @@ new = """    // [ingres-async] compose() di thread terpisah supaya UI/touch tida
     }).detach();
     return 0;"""
 if s.count(old) == 1:
-    s = s.replace(old, new); done += 1
-if done == 2:
-    if "#include <thread>" not in s:
-        s = s.replace("#include <atomic> // [ofox-haptics]", "#include <atomic> // [ofox-haptics]\n#include <thread> // [ingres-async]", 1)
+    s = s.replace(old, new); changed.append("compose async")
+
+if "[ingres-async]" in s and "#include <thread> // [ingres-async]" not in s:
+    s = s.replace("#include <atomic> // [ofox-haptics]", "#include <atomic> // [ofox-haptics]\n#include <thread> // [ingres-async]", 1)
+
+ok = all(m in s for m in ("[ingres-nonblock]", "[ingres-async] perform", "[ingres-async] compose"))
+if changed:
     open(p, "w").write(s)
-    print("events.cpp: perform()/compose() dipindah ke thread (anti-lag)")
-else:
-    print("PERINGATAN: pola perform/compose tidak ketemu (%d/2) -- events.cpp tidak diubah" % done)
+print("events.cpp anti-lag: " + (", ".join(changed) if changed else "sudah terpasang") + ("" if ok else "  [PERINGATAN: sebagian pola tidak ketemu]"))
 PY
 fi
 
