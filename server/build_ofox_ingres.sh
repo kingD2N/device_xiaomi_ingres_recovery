@@ -3,19 +3,20 @@
 #  Build OrangeFox Recovery untuk ingres (POCO F4 GT) di server sendiri,
 #  lalu upload hasilnya (recovery.img + zip OrangeFox + log) ke GoFile.
 #
-#  Isi sama dengan workflow "Recovery OFOX Build" (branch OFOX_New):
+#  Isi sama dengan workflow "Recovery OFOX Build":
 #  patch haptic, dukungan motor awinic, perbaikan openaes, foto maintainer, dll.
 #
-#  Lokasi resmi script ini: repo PUBLIC kingD2N/device_xiaomi_ingres_recovery (branch OFOX_New),
+#  Lokasi resmi script ini: repo PUBLIC kingD2N/device_xiaomi_ingres_recovery (branch OFOX),
 #  folder server/. Patch haptic ada di folder patches/ repo yang sama.
 #
 #  Pakai (jalankan di dalam byobu supaya aman kalau koneksi Termius putus):
 #     bash build_ofox_ingres.sh                 -> MENU pilihan (manifest, branch, varian, patch)
+#     bash <(curl -fsSL https://raw.githubusercontent.com/kingD2N/device_xiaomi_ingres_recovery/OFOX/server/build_ofox_ingres.sh)
 #     bash build_ofox_ingres.sh fox_16.0        -> langsung build tanpa menu
 #     bash build_ofox_ingres.sh fox_12.1        -> manifest fox_12.1
 #  Argumen: [MANIFEST] [BRANCH_TREE] [VARIAN] [NOMOR_PATCH]
 #     MANIFEST    : fox_16.0 | fox_14.1 | fox_12.1
-#     BRANCH_TREE : OFOX_New | OFOX | BETA
+#     BRANCH_TREE : OFOX | OFOX_New | BETA
 #     VARIAN      : Default | HyperOS
 #     NOMOR_PATCH : 1..10
 #  Source yang sudah di-sync dipakai lagi di build berikutnya (tidak sync ulang).
@@ -23,7 +24,7 @@
 # ==============================================================================
 
 MANIFEST="${1:-fox_16.0}"
-TREE_BRANCH="${2:-OFOX_New}"
+TREE_BRANCH="${2:-OFOX}"
 VARIANT="${3:-Default}"
 PATCH_VERSION="${4:-4}"
 
@@ -57,7 +58,7 @@ if [ $# -eq 0 ] && [ -t 0 ]; then
   printf '\033[0m'
   pick "Manifest OrangeFox" 1 "fox_16.0   (Android 16)" "fox_12.1   (Android 12, efek haptic lengkap)" "fox_14.1   (Android 14, eksperimental)"
   MANIFEST="$PICKED"
-  pick "Branch device tree ingres" 1 "OFOX_New   (fitur baru: haptic, foto About, dll.)" "OFOX       (versi lama)" "BETA"
+  pick "Branch device tree ingres" 1 "OFOX       (versi utama: haptic, foto About, dll.)" "OFOX_New   (sama dengan OFOX, untuk uji coba)" "BETA"
   TREE_BRANCH="$PICKED"
   pick "Varian" 1 "Default    (ROM custom AOSP)" "HyperOS    (ROM stock/MIUI/HyperOS)"
   VARIANT="$PICKED"
