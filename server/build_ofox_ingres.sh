@@ -299,6 +299,9 @@ if [ -f "$IMG" ] && [ -f "$DST" ] && file "$IMG" | grep -q 'PNG image data, 192 
   cp -f "$IMG" "$DST" && echo "Foto maintainer dipasang"
 fi
 
+# Rapikan teks sambutan (bahasa Indonesia) supaya titik dua sejajar
+[ -f "$DEVICE_PATH/patches/ofox_rapikan_welcome.py" ] && python3 "$DEVICE_PATH/patches/ofox_rapikan_welcome.py" bootable/recovery
+
 # ------------------------------------------------------------------ 4. lunch
 say "4/6 lunch"
 # shellcheck disable=SC1091
