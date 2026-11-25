@@ -15,7 +15,7 @@
 #     bash build_ofox_ingres.sh fox_16.0        -> langsung build tanpa menu
 #     bash build_ofox_ingres.sh fox_12.1        -> manifest fox_12.1
 #  Argumen: [MANIFEST] [BRANCH_TREE] [VARIAN] [NOMOR_PATCH]
-#     MANIFEST    : fox_16.0 | fox_14.1 | fox_12.1
+#     MANIFEST    : fox_12.1 | fox_16.0 | fox_14.1
 #     BRANCH_TREE : OFOX | OFOX_New | BETA
 #     VARIAN      : Default | HyperOS
 #     NOMOR_PATCH : 1..10
@@ -23,7 +23,7 @@
 #  Paksa sync ulang:  RESYNC=1 bash build_ofox_ingres.sh
 # ==============================================================================
 
-MANIFEST="${1:-fox_16.0}"
+MANIFEST="${1:-fox_12.1}"
 TREE_BRANCH="${2:-OFOX}"
 VARIANT="${3:-Default}"
 PATCH_VERSION="${4:-4}"
@@ -56,7 +56,7 @@ if [ $# -eq 0 ] && [ -t 0 ]; then
   echo '   Build di server + upload ke GoFile  | kingD2N'
   echo '=================================================='
   printf '\033[0m'
-  pick "Manifest OrangeFox" 1 "fox_16.0   (Android 16)" "fox_12.1   (Android 12, efek haptic lengkap)" "fox_14.1   (Android 14, eksperimental)"
+  pick "Manifest OrangeFox" 1 "fox_12.1   (Android 12, versi utama: getar + efek haptic teruji)" "fox_16.0   (Android 16)" "fox_14.1   (Android 14, eksperimental)"
   MANIFEST="$PICKED"
   pick "Branch device tree ingres" 1 "OFOX       (versi utama: haptic, foto About, dll.)" "OFOX_New   (sama dengan OFOX, untuk uji coba)" "BETA"
   TREE_BRANCH="$PICKED"
