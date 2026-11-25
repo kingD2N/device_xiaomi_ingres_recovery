@@ -84,6 +84,9 @@ JOBS="${JOBS:-$(( $(nproc) / 2 ))}"
 [ "$JOBS" -lt 4 ] && JOBS=4
 
 WORK="${WORK:-$HOME/ofox-ingres}"
+# Folder terminal tempat script dijalankan bisa saja sudah dihapus (mis. ~/evox);
+# git gagal "Unable to read current working directory" -> selalu pindah ke WORK.
+mkdir -p "$WORK" && cd "$WORK" || { echo "Tidak bisa masuk ke $WORK"; exit 1; }
 SRC="$WORK/$MANIFEST"
 STAMP="$(date +%Y%m%d-%H%M)"
 LOG="$WORK/build-$MANIFEST-$STAMP.log"
